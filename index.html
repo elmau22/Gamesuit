@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Suit AI - Batu Kertas Gunting Webcam</title>
+    
+    <!-- Tailwind CSS untuk Styling Modern -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- MediaPipe Hands dan Utilities via CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        /* Mirrored Video/Canvas agar berfungsi seperti cermin */
+        .mirrored {
+            transform: scaleX(-1);
+        }
+
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            aspect-ratio: 4/3;
+            border-radius: 1rem;
+            overflow: hidden;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            background-color: #000;
+        }
+
+        video, canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .emoji-result {
+            font-size: 5rem;
+            animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+
+        @keyframes popIn {
+            0% { transform: scale(0); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .pulse-text {
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8 flex items-center justify-center">
+
+    <div class="max-w-6xl w-full grid grid-cols-1 lg:grid-cols-2 gap-8 items-center">
+        
+        <!-- Bagian Kiri: Webcam & Deteksi -->
+        <div class="flex flex-col items-center">
+            <h1 class="text-3xl font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-blue-500">
+                Suit AI vs Webcam
+            </h1>
+            
+            <div class="video-container border-4 border-gray-700">
+                <!-- Video loading indicator -->
+                <div id="loading" class="absolute inset-0 flex items-center justify-center bg-black/80 z-20">
+                    <p class="text-xl pulse-text">Memuat Kamera & AI Model...</p>
+                </div>
+                
+                <video id="input_video" class="mirrored" autoplay playsinline></video>
+                <canvas id="output_canvas" class="mirrored z-10"></canvas>
+            </div>
+
+            <div class="mt-4 bg-gray-800/80 px-6 py-3 rounded-full shadow-lg border border-gray-600">
+                <p class="text-lg font-semibold">
+                    Status Kamera: <span id="status-text" class="text-yellow-400">Menunggu Tangan...</span>
+                </p>
+            </div>
+        </div>
+
+        <!-- Bagian Kanan: UI Game & Skor -->
+        <div class="flex flex-col items-center bg-gray-900/60 p-8 rounded-2xl shadow-2xl border border-gray-700 w-full">
+            
+            <!-- Papan Skor -->
+            <div class="flex justify-between w-full mb-8 text-center bg-gray-800 rounded-xl p-4 shadow-inner">
+                <div class="flex-1">
+                    <h2 class="text-xl text-gray-400 font-semibold">Skor Kamu</h2>
+                    <p id="player-score" class="text-4xl font-bold text-green-400 mt-2">0</p>
+                </div>
+                <div class="w-px bg-gray-600 mx-4"></div>
+                <div class="flex-1">
+                    <h2 class="text-xl text-gray-400 font-semibold">Skor AI</h2>
+                    <p id="computer-score" class="text-4xl font-bold text-red-400 mt-2">0</p>
+                </div>
+            </div>
+
+            <!-- Area Pertandingan -->
+            <div class="flex items-center justify-center gap-6 w-full h-40 bg-gray-800/50 rounded-xl mb-8 border-2 border-dashed border-gray-600 relative overflow-hidden">
+                
+                <!-- Countdown Overlay -->
+                <div id="countdown-overlay" class="absolute inset-0 flex items-center justify-center bg-black/60 hidden z-10">
+                    <p id="countdown-text" class="text-6xl font-bold text-white drop-shadow-lg"></p>
+                </div>
+
+                <!-- Hasil Pertandingan -->
+                <div class="text-center w-1/3">
+                    <p class="text-sm text-gray-400 mb-2">Kamu</p>
+                    <div id="player-choice" class="emoji-result hidden">✊</div>
+                </div>
+                
+                <div class="text-center w-1/3">
+                    <p class="text-2xl font-black text-gray-500 italic">VS</p>
+                </div>
+
+                <div class="text-center w-1/3">
+                    <p class="text-sm text-gray-400 mb-2">Komputer</p>
+                    <div id="computer-choice" class="emoji-result hidden">🤖</div>
+                </div>
+            </div>
+
+            <!-- Teks Hasil (Menang/Kalah/Seri) -->
+            <h2 id="result-text" class="text-3xl font-bold text-center mb-8 h-10 text-white"></h2>
+
+            <!-- Tombol Mulai -->
+            <button id="start-btn" disabled class="w-full py-4 rounded-xl text-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 shadow-lg transform transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
+                Mulai Suit!
+            </button>
+        </div>
+
+    </div>
+
+    <!-- Script Logika Game dan Computer Vision -->
+    <script>
+        // --- 1. DEKLARASI VARIABEL & ELEMEN DOM ---
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const loadingOverlay = document.getElementById('loading');
+        
+        const statusText = document.getElementById('status-text');
+        const playerScoreEl = document.getElementById('player-score');
+        const computerScoreEl = document.getElementById('computer-score');
+        
+        const startBtn = document.getElementById('start-btn');
+        const countdownOverlay = document.getElementById('countdown-overlay');
+        const countdownText = document.getElementById('countdown-text');
+        
+        const playerChoiceEl = document.getElementById('player-choice');
+        const computerChoiceEl = document.getElementById('computer-choice');
+        const resultText = document.getElementById('result-text');
+
+        let currentGesture = null;
+        let isGameRunning = false;
+        let playerScore = 0;
+        let computerScore = 0;
+
+        const CHOICES = {
+            'Batu': '✊',
+            'Kertas': '✋',
+            'Gunting': '✌️'
+        };
+
+        // --- 2. LOGIKA COMPUTER VISION (DETEKSI GESTURE TANGAN) ---
+        
+        /* * CARA KERJA ALGORITMA DETEKSI JARI:
+         * MediaPipe Hands memberikan 21 titik (landmarks) pada tangan. Koordinat 'y' 
+         * bernilai 0 di bagian paling atas gambar dan 1 di paling bawah gambar.
+         * * Untuk mengetahui apakah sebuah jari sedang terbuka atau terlipat:
+         * Kita membandingkan posisi y pada ujung jari (Tip) dengan posisi y pada sendi
+         * jari bagian bawah (PIP / Proximal Interphalangeal joint).
+         * * Jika Titik y(Tip) < Titik y(PIP), artinya ujung jari berada lebih TINGGI 
+         * di layar dibandingkan sendinya (ingat, y=0 ada di atas). Maka jari terbuka.
+         * * Index Jari (Landmarks):
+         * - Telunjuk (Index): Tip = 8, PIP = 6
+         * - Tengah (Middle): Tip = 12, PIP = 10
+         * - Manis (Ring): Tip = 16, PIP = 14
+         * - Kelingking (Pinky): Tip = 20, PIP = 18
+         * * Ibu Jari (Thumb) bergerak di sumbu X, agak kompleks untuk dihitung dengan y.
+         * Tapi untuk Batu Kertas Gunting, mendeteksi 4 jari lainnya sudah cukup 
+         * untuk membedakan 3 gestur utama secara sangat akurat!
+         */
+        function detectGesture(landmarks) {
+            // Cek kondisi 4 jari utama (True = Terbuka, False = Tertutup)
+            const isIndexOpen = landmarks[8].y < landmarks[6].y;
+            const isMiddleOpen = landmarks[12].y < landmarks[10].y;
+            const isRingOpen = landmarks[16].y < landmarks[14].y;
+            const isPinkyOpen = landmarks[20].y < landmarks[18].y;
+
+            // Logika Gunting: Telunjuk & Tengah terbuka, Manis & Kelingking tertutup
+            if (isIndexOpen && isMiddleOpen && !isRingOpen && !isPinkyOpen) {
+                return 'Gunting';
+            }
+            // Logika Kertas: Keempat jari terbuka lebar
+            else if (isIndexOpen && isMiddleOpen && isRingOpen && isPinkyOpen) {
+                return 'Kertas';
+            }
+            // Logika Batu: Keempat jari terlipat / tertutup
+            else if (!isIndexOpen && !isMiddleOpen && !isRingOpen && !isPinkyOpen) {
+                return 'Batu';
+            }
+            
+            return 'Tidak Diketahui';
+        }
+
+        function onResults(results) {
+            // Sembunyikan loading saat frame pertama berhasil diproses
+            if(loadingOverlay.style.display !== 'none') {
+                loadingOverlay.style.display = 'none';
+                startBtn.disabled = false; // Aktifkan tombol mulai
+            }
+
+            // Bersihkan kanvas
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                // Ambil tangan pertama yang terdeteksi
+                const landmarks = results.multiHandLandmarks[0];
+                
+                // Gambar kerangka (wireframe) tangan di kanvas
+                drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 3});
+                drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 1, radius: 3});
+
+                // Deteksi gestur saat ini
+                currentGesture = detectGesture(landmarks);
+                
+                // Update UI Status (Jika game tidak sedang menghitung mundur)
+                if(!isGameRunning) {
+                    if(currentGesture === 'Tidak Diketahui') {
+                        statusText.textContent = "Bentuk tangan tidak jelas 🤔";
+                        statusText.className = "text-yellow-400";
+                    } else {
+                        statusText.textContent = `Mendeteksi ${currentGesture} ${CHOICES[currentGesture]}`;
+                        statusText.className = "text-green-400 font-bold";
+                    }
+                }
+            } else {
+                currentGesture = null;
+                if(!isGameRunning) {
+                    statusText.textContent = "Tidak ada tangan 🖐️";
+                    statusText.className = "text-gray-400";
+                }
+            }
+            canvasCtx.restore();
+        }
+
+        // --- 3. INISIALISASI MEDIAPIPE HANDS ---
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+        
+        hands.setOptions({
+            maxNumHands: 1, // Kita hanya perlu melacak 1 tangan pemain
+            modelComplexity: 1, // Keseimbangan antara akurasi dan performa
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
+        });
+        
+        hands.onResults(onResults);
+
+        // Menghubungkan Kamera Webcam ke MediaPipe
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                // Sesuaikan ukuran kanvas dengan video feed
+                canvasElement.width = videoElement.videoWidth;
+                canvasElement.height = videoElement.videoHeight;
+                await hands.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+        camera.start();
+
+        // --- 4. LOGIKA ALUR PERMAINAN (GAME FLOW) ---
+        
+        startBtn.addEventListener('click', () => {
+            if(isGameRunning) return;
+            startGame();
+        });
+
+        function startGame() {
+            isGameRunning = true;
+            startBtn.disabled = true;
+            startBtn.textContent = "Menunggu Hasil...";
+            
+            // Reset UI
+            playerChoiceEl.classList.add('hidden');
+            computerChoiceEl.classList.add('hidden');
+            resultText.textContent = "";
+            countdownOverlay.classList.remove('hidden');
+            
+            let count = 3;
+            countdownText.textContent = count;
+
+            // Efek Hitung Mundur
+            const interval = setInterval(() => {
+                count--;
+                if(count > 0) {
+                    countdownText.textContent = count;
+                } else if(count === 0) {
+                    countdownText.textContent = "SUIT!";
+                    countdownText.classList.add('text-yellow-400', 'scale-150', 'transition-transform');
+                } else {
+                    clearInterval(interval);
+                    countdownOverlay.classList.add('hidden');
+                    countdownText.classList.remove('text-yellow-400', 'scale-150', 'transition-transform');
+                    processGameResult();
+                }
+            }, 1000);
+        }
+
+        function processGameResult() {
+            // Ambil pilihan (Kunci Pilihan Pemain saat 'Suit!')
+            const playerFinalChoice = currentGesture;
+
+            if(!playerFinalChoice || playerFinalChoice === 'Tidak Diketahui') {
+                // Pemain tidak membentuk tangan dengan benar saat waktu habis
+                resultText.textContent = "Gagal membaca tanganmu! Coba lagi.";
+                resultText.className = "text-2xl font-bold text-center mb-8 h-10 text-yellow-500";
+                resetGameState();
+                return;
+            }
+
+            // Komputer memilih secara Acak (Random RNG)
+            const keys = Object.keys(CHOICES);
+            const computerFinalChoice = keys[Math.floor(Math.random() * keys.length)];
+
+            // Tampilkan hasil di UI (dengan trik restart animasi)
+            playerChoiceEl.textContent = CHOICES[playerFinalChoice];
+            computerChoiceEl.textContent = CHOICES[computerFinalChoice];
+            
+            playerChoiceEl.classList.remove('hidden');
+            computerChoiceEl.classList.remove('hidden');
+            
+            // Paksa reflow agar animasi pop-in CSS berjalan ulang
+            void playerChoiceEl.offsetWidth; 
+            void computerChoiceEl.offsetWidth;
+
+            // Bandingkan untuk mencari Pemenang
+            determineWinner(playerFinalChoice, computerFinalChoice);
+        }
+
+        function determineWinner(player, computer) {
+            let result = "";
+            let colorClass = "";
+
+            if (player === computer) {
+                result = "Seri! 🤝";
+                colorClass = "text-yellow-400";
+            } else if (
+                (player === 'Batu' && computer === 'Gunting') ||
+                (player === 'Gunting' && computer === 'Kertas') ||
+                (player === 'Kertas' && computer === 'Batu')
+            ) {
+                result = "Kamu Menang! 🎉";
+                colorClass = "text-green-400";
+                playerScore++;
+                playerScoreEl.textContent = playerScore;
+                
+                // Tambahkan efek membesar pada skor
+                playerScoreEl.classList.add('scale-150');
+                setTimeout(() => playerScoreEl.classList.remove('scale-150', 'transition-transform'), 300);
+            } else {
+                result = "Komputer Menang! 🤖";
+                colorClass = "text-red-400";
+                computerScore++;
+                computerScoreEl.textContent = computerScore;
+
+                // Tambahkan efek membesar pada skor
+                computerScoreEl.classList.add('scale-150');
+                setTimeout(() => computerScoreEl.classList.remove('scale-150', 'transition-transform'), 300);
+            }
+
+            resultText.textContent = result;
+            resultText.className = `text-3xl font-bold text-center mb-8 h-10 transition-colors duration-300 ${colorClass}`;
+            
+            resetGameState();
+        }
+
+        function resetGameState() {
+            isGameRunning = false;
+            startBtn.disabled = false;
+            startBtn.textContent = "Mulai Suit Lagi!";
+        }
+    </script>
+</body>
+</html>
+
